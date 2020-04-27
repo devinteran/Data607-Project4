@@ -1,0 +1,217 @@
+---
+title: "Project 4 - Spam Email"
+author: "Devin Teran"
+date: "4/25/2020"
+output: rmdformats::readthedown
+---
+# Overview  
+During this project we're going to use a set of spam and normal (ham) emails to predict whether an email is spam or not.  We're using a set of example emails, which were downloaded from [https://spamassassin.apache.org/old/publiccorpus/](https://spamassassin.apache.org/old/publiccorpus/).  
+  
+# Libraries Needed:  
+
+* tm  
+* dplyr  
+* tidyverse  
+* stringr  
+* tidytext  
+* tidyverse  
+* caTools  
+* e1071  
+* wordcloud  
+* RColorBrewer  
+```{r setup,echo=FALSE,message=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tm)
+library(dplyr)
+library(tidyverse)
+library(stringr)
+library(tidytext)
+library(tidyverse)
+library(caTools)
+library(e1071)
+library(wordcloud)
+library(RColorBrewer)
+```
+
+This function will be used to remove a lot of the text which is related to sending an email.  We don't want to analyze this because it's not the actual text in an email.   
+```{r delete-header-info-from-emails}
+#read in text and remove header email formatting that isn't related to email text
+cleanEmails <- function(text){
+  for (i in 1:length(text)){
+    for (j in 1:dim(text[[i]][1])[1]){
+      
+      if (str_detect(text[[i]][j,],'^From:') == TRUE){
+        
+        text[[i]] <- text[[i]][j:dim(text[[i]][1])[1],]
+        
+        break
+      }
+    }
+    next
+  }
+}
+
+```
+
+# Get Spam Data  
+These emails were originally downloaded from [https://spamassassin.apache.org/old/publiccorpus/](https://spamassassin.apache.org/old/publiccorpus/)
+```{r get-spam-emails,warning = FALSE,message=FALSE}
+#get file paths of spam emails
+spam_emails <- str_replace_all(paste(getwd(),"/Data/spam_2/",list.files("Data/spam_2"))," ","")
+
+spam <- lapply(spam_emails,read_csv)
+
+cleanEmails(spam)
+```
+
+## Create spam corpus  
+```{r create-spam-corpus,warning = FALSE,message=FALSE}
+#create spam corpus
+spam_corpus <- VCorpus(VectorSource(spam))
+
+#create document term matrix using spam corpus
+spam_dtm <- DocumentTermMatrix(spam_corpus)
+
+#create tidy dtm with column to flag if email is spam or not
+tidy_spam_dtm <- tidy(spam_dtm)
+tidy_spam_dtm$spam <- 1
+
+#replace commas and quotations
+tidy_spam_dtm$term <- str_replace_all(tidy_spam_dtm$term,",","")
+tidy_spam_dtm$term <- str_replace_all(tidy_spam_dtm$term,"'","")
+tidy_spam_dtm$term <- str_replace_all(tidy_spam_dtm$term,'"','')
+tidy_spam_dtm$term <- str_replace_all(tidy_spam_dtm$term,'\\(','')
+tidy_spam_dtm$term <- str_replace_all(tidy_spam_dtm$term,'\\)','')
+tidy_spam_dtm$term <- str_replace_all(tidy_spam_dtm$term,'\\{','')
+tidy_spam_dtm$term <- str_replace_all(tidy_spam_dtm$term,'\\}','')
+tidy_spam_dtm$term <- str_replace_all(tidy_spam_dtm$term,';','')
+
+#make all words lowercase
+#tidy_spam_dtm$term <- toLower(tidy_spam_dtm$term)
+
+```
+
+# Get Non-Spam (Ham) Email Data
+These are non-spam emails  
+```{r get-ham-emails,warning = FALSE,message=FALSE}
+#get file paths of ham emails (non-spam)
+ham_emails <- str_replace_all(paste(getwd(),"/Data/easy_ham/",list.files("Data/easy_ham"))," ","")
+
+#read in ham emails (non-spam)
+ham <- lapply(ham_emails,read_csv)
+
+cleanEmails(ham)
+```
+
+## Create ham corpus
+```{r create-ham-corpus,warning = FALSE,message=FALSE}
+#create ham corpus
+ham_corpus <- VCorpus(VectorSource(ham))
+
+#create document term matrix using ham corpus
+ham_dtm <- DocumentTermMatrix(ham_corpus)
+
+#create tidy dtm with column to flag if email is spam or not
+tidy_ham_dtm <- tidy(ham_dtm)
+tidy_ham_dtm$spam <- 0
+
+#replace commas and quotations
+tidy_ham_dtm$term <- str_replace_all(tidy_ham_dtm$term,",","")
+tidy_ham_dtm$term <- str_replace_all(tidy_ham_dtm$term,"'","")
+tidy_ham_dtm$term <- str_replace_all(tidy_ham_dtm$term,'"','')
+tidy_ham_dtm$term <- str_replace_all(tidy_ham_dtm$term,"\\(","")
+tidy_ham_dtm$term <- str_replace_all(tidy_ham_dtm$term,"\\)","")
+tidy_ham_dtm$term <- str_replace_all(tidy_ham_dtm$term,"\\{","")
+tidy_ham_dtm$term <- str_replace_all(tidy_ham_dtm$term,"\\}","")
+tidy_ham_dtm$term <- str_replace_all(tidy_ham_dtm$term,";","")
+
+#make all words lowercase
+#tidy_ham_dtm$term <- toLower(tidy_ham_dtm$term)
+```
+
+# Remove Stop Words  
+Below we're going to remove common words relating to email formats.  
+```{r add-to-stopwords}
+stopwords <- tidytext::get_stopwords(language = "en",source = "smart")
+stopwords <- bind_rows(tibble(word = c("From:","Re:","Email:","Received:","cc:","date:"), 
+                              lexicon = c("custom","custom","custom","custom","custom","custom")), 
+                              stopwords)
+```
+
+# Combine the ham and spam document
+```{r combine-tidy-htm}
+combo_tidy_dtm <- rbind(tidy_ham_dtm,tidy_spam_dtm)
+
+#remove stop words
+combo_tidy_dtm <- combo_tidy_dtm %>% anti_join(stopwords,by = c(term = 'word'))
+
+combo_tidy_dtm <- combo_tidy_dtm %>% filter(!str_detect(term,"[\\d]"))
+combo_tidy_dtm <- combo_tidy_dtm %>% filter(!str_detect(term,"[\\-]"))
+combo_tidy_dtm <- combo_tidy_dtm %>% filter(!str_detect(term,"[<|>]"))
+combo_tidy_dtm <- combo_tidy_dtm %>% filter(!str_detect(term,"[\\\\]"))
+combo_tidy_dtm <- combo_tidy_dtm %>% filter(!str_detect(term,"[\\.]"))
+combo_tidy_dtm <- combo_tidy_dtm %>% filter(!str_detect(term,"[:]"))
+combo_tidy_dtm <- combo_tidy_dtm %>% filter(!str_detect(term,"[+]"))
+combo_tidy_dtm <- combo_tidy_dtm %>% filter(!str_detect(term,"^...$"))
+```
+
+# Spam Word Cloud
+Here we generate a Word Cloud Based on Spam Words.  The most frequent spam words are:  
+
+* esmtp
+* email
+* localhost
+* click
+* mailing
+* money
+* free
+* receive  
+  
+Some of these words may be related to the email but some make sense.  Spam emails try to get users to **click** and give **money**.
+```{r spam-word-cloud}
+
+term_count <- combo_tidy_dtm %>%
+  group_by(term) %>%
+  select(term,count,spam) %>%
+  filter(spam == 1) %>%
+  summarize(term_count = sum(count))
+
+term_count %>%
+  arrange(-term_count,term)
+
+wordcloud(words = term_count$term, freq = term_count$term_count, min.freq = 1, max.words=100, random.order=FALSE, rot.per=0.35,            colors=brewer.pal(8, "Dark2"))
+
+#email_tidy <- combo_tidy_dtm %>% 
+#  group_by(document,spam) %>% 
+#  top_n(5,count) %>% 
+#  arrange(document,spam,-count)
+
+```
+
+# Setting up test & training data  
+We're going to separate the data into 75% training and 25% test data.  
+```{r test-and-train}
+set.seed(101) 
+sample = sample.split(combo_tidy_dtm$term, SplitRatio = .75)
+train = subset(combo_tidy_dtm, sample == TRUE)
+test  = subset(combo_tidy_dtm, sample == FALSE)
+
+```
+
+# Prediction  
+60% of the emails are not spam while 40% are spam.  We're going to create a naive bayes classifier to help us predict whether an email is spam or not.  With more time and knowledge, I would have explored more prediction classifiers.  
+```{r prediction}
+prop.table(table(combo_tidy_dtm$spam)) * 100
+
+naiveBayes <- naiveBayes(train, factor(train$spam))
+predict <- predict(naiveBayes,test)
+table(predict, test$spam)
+
+```
+
+## Resources  
+  
+* [https://stackoverflow.com/questions/17200114/how-to-split-data-into-training-testing-sets-using-sample-function](https://stackoverflow.com/questions/17200114/how-to-split-data-into-training-testing-sets-using-sample-function)  
+* [https://www.edureka.co/blog/naive-bayes-in-r/](https://www.edureka.co/blog/naive-bayes-in-r/)  
+* [https://spamassassin.apache.org/old/publiccorpus/](https://spamassassin.apache.org/old/publiccorpus/)  
+
